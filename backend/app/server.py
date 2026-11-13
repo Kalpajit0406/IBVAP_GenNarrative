@@ -48,6 +48,7 @@ from ibvap.event_store import EventStore
 from ibvap.evidence import EvidenceChain
 from ibvap.geofence import GeoFenceEngine
 from ibvap.learn import Harvester
+from ibvap.narrative import generate_event_narrative, generate_shift_narrative
 from ibvap.risk_engine import RiskEngine
 from ibvap.rtsp_capture import RtspCapture, redact
 from ibvap.screen_capture import ScreenCapture
@@ -1387,6 +1388,18 @@ async def ack_event(event_id: str, request: Request):
     return JSONResponse({"ok": True, "event": row})
 
 
+@app.get("/api/events/{event_id}/narrative")
+async def get_event_narrative(event_id: str):
+    """Generate an explainable AI natural language incident narrative for a single event."""
+    if _event_store is None:
+        return JSONResponse({"error": "event store unavailable"}, status_code=503)
+    rows = await asyncio.to_thread(_event_store.query, 1, None, None, None, None, None, event_id)
+    if not rows:
+        return JSONResponse({"error": "unknown event"}, status_code=404)
+    report = generate_event_narrative(rows[0])
+    return JSONResponse({"ok": True, "event_id": event_id, "narrative": report})
+
+
 @app.get("/api/events/export")
 async def export_events(fmt: str = "csv", since: float | None = None,
                         until: float | None = None, limit: int = 1000,
@@ -1401,6 +1414,14 @@ async def export_events(fmt: str = "csv", since: float | None = None,
         None, until, True)
     if fmt.lower() == "json":
         return JSONResponse({"events": rows, "count": len(rows)})
+    if fmt.lower() in ("narrative", "txt", "text", "md", "markdown"):
+        post_name = str(cfg.get("site", {}).get("post_name", "BOP Sector"))
+        narrative_text = generate_shift_narrative(rows, site_name=post_name)
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        ext = "md" if fmt.lower() in ("md", "markdown") else "txt"
+        return Response(narrative_text, media_type="text/markdown" if ext == "md" else "text/plain",
+                        headers={"Content-Disposition":
+                                 f'attachment; filename="ibvap_shift_narrative_{stamp}.{ext}"'})
     cols = ["event_id", "ts_utc", "site_id", "post_name", "cam_id", "cam_name",
             "lat", "lon", "severity", "category", "score", "persons", "vehicles",
             "ev_hash", "acked_at", "acked_by", "ack_note"]

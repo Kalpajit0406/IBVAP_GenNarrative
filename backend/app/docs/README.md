@@ -20,6 +20,7 @@ numbers, and design rationale. Everything below is a focused guide for one part.
 | [THERMAL_NIGHT.md](THERMAL_NIGHT.md) | Night/IR yolo26n fine-tune (`training/train_thermal.py`, LLVIP + FLIR ADAS) → hot-swap model |
 | [CONTINUOUS_LEARNING.md](CONTINUOUS_LEARNING.md) | Harvest → operator review → `training/retrain.py` fine-tune + hot-swap; per-camera calibration |
 | [SCREEN_WATCH.md](SCREEN_WATCH.md) | `scripts/screen_watch.py` — the full stack painted as a transparent on-screen overlay (demo) |
+| [GEN_NARRATIVE.md](GEN_NARRATIVE.md) | Generative Incident Narrative engine — natural language operational summaries & shift reports |
 
 ## Reference / submission material
 | doc | about |
