@@ -230,6 +230,46 @@ def _():
     assert sink["failures"] >= 1 and sink["last_error"]
 
 
+@case("telegram sink disables itself if token or chat_id is missing and masks target")
+def _():
+    from ibvap.sinks import TelegramSink
+    t_empty = TelegramSink({"enabled": True})
+    assert not t_empty.enabled
+    assert t_empty.target() == "telegram://bot:***@"
+
+    t = TelegramSink({"enabled": True, "bot_token": "123456789:ABCDEF_secret", "chat_id": "-10012345"})
+    assert t.enabled
+    assert "123456..." in t.target()
+    assert "secret" not in t.target()
+
+
+@case("telegram sink formats markdown alert with threat details")
+def _():
+    from ibvap.sinks import TelegramSink, build_sinks
+    t = TelegramSink({"enabled": True, "bot_token": "123456:ABC", "chat_id": "-100"})
+    row = {
+        "event_id": "01HX1",
+        "severity": "Critical",
+        "category": "weapon",
+        "score": 96.0,
+        "post_name": "BOP Sector 4",
+        "cam_name": "CAM-01",
+        "persons": 1,
+        "vehicles": 0,
+        "details": {"armed": True, "weapon": True, "fence_name": "North Wire"},
+        "ev_hash": "abcdef1234567890",
+    }
+    msg = t.format_message(row)
+    assert "🚨 *IBVAP BORDER ALERT: [CRITICAL]*" in msg
+    assert "BOP Sector 4" in msg
+    assert "Armed Posture" in msg
+    assert "`abcdef123456...`" in msg
+
+    sinks = build_sinks([{"type": "telegram", "enabled": True, "bot_token": "123", "chat_id": "456"}])
+    assert len(sinks) == 1
+    assert sinks[0].name == "telegram"
+
+
 def run() -> int:
     failed = 0
     for name, fn in CASES:

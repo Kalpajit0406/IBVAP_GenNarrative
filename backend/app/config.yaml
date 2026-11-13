@@ -57,6 +57,14 @@ alerts:
       topic: "ibvap/events"
       qos: 1
       min_severity: "High"
+    # Outbound Telegram Bot channel — instant field dispatch without inbound exposure.
+    - type: telegram
+      label: "Field Telegram channel"
+      enabled: false
+      bot_token: ""                             # from @BotFather
+      chat_id: ""                               # channel ID or group ID
+      min_severity: "Critical"
+      timeout_s: 6.0
 
 # ── Stream sources ───────────────────────────────────────────────────────────
 # server.py opens every entry here on startup, alongside phones:

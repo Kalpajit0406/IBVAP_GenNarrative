@@ -274,7 +274,82 @@ class MqttSink(Sink):
             return False, f"{type(e).__name__}: {e}"
 
 
-_KINDS = {"webhook": WebhookSink, "syslog": SyslogSink, "mqtt": MqttSink}
+class TelegramSink(Sink):
+    """
+    Outbound Telegram Bot sink. Posts formatted incident alerts directly to a
+    Telegram channel or command group via HTTPS. Outbound only, zero dependencies.
+    """
+    name = "telegram"
+
+    def __init__(self, cfg: dict) -> None:
+        super().__init__(cfg)
+        self.bot_token = str(self.cfg.get("bot_token", "")).strip()
+        self.chat_id = str(self.cfg.get("chat_id", "")).strip()
+        self.timeout = float(self.cfg.get("timeout_s", 6.0))
+        if not self.bot_token or not self.chat_id:
+            self.enabled = False
+
+    def target(self) -> str:
+        masked = self.bot_token[:6] + "..." if len(self.bot_token) > 6 else "***"
+        return f"telegram://bot:{masked}@{self.chat_id}"
+
+    def format_message(self, row: dict) -> str:
+        sev = str(row.get("severity") or "Info").upper()
+        icon = "🚨" if sev in ("CRITICAL", "HIGH") else "⚠️" if sev == "MEDIUM" else "ℹ️"
+        site = row.get("post_name") or row.get("site_id") or "BOP"
+        cam = row.get("cam_name") or f"CAM-{row.get('cam_id', 0):02d}"
+        cat = str(row.get("category") or "risk").capitalize()
+        score = float(row.get("score") or 0.0)
+        p = row.get("persons") or 0
+        v = row.get("vehicles") or 0
+        ev_hash = str(row.get("ev_hash") or "")[:12]
+
+        lines = [
+            f"{icon} *IBVAP BORDER ALERT: [{sev}]*",
+            f"📍 *Sector:* {site} | *Source:* {cam}",
+            f"🏷️ *Category:* {cat} | *Score:* {score:.1f}/100",
+            f"👥 *Entities:* {p} person(s), {v} vehicle(s)",
+        ]
+        d = row.get("details") or {}
+        if isinstance(d, dict):
+            if d.get("weapon") or d.get("armed"):
+                lines.append("⚔️ *Threat:* Confirmed Weapon / Armed Posture")
+            if d.get("breach"):
+                lines.append(f"🚧 *Breach:* Virtual fence '{d.get('fence_name', 'Perimeter')}'")
+            if d.get("plate"):
+                lines.append(f"🚗 *ANPR:* Vehicle Plate `[{d.get('plate')}]`")
+            if d.get("criminal_match"):
+                lines.append(f"👤 *Watchlist Match:* {d.get('criminal_name', 'Subject')}")
+        if ev_hash:
+            lines.append(f"🔐 *SHA256 Hash:* `{ev_hash}...`")
+        return "\n".join(lines)
+
+    def send(self, row: dict) -> tuple[bool, str]:
+        if not self.bot_token or not self.chat_id:
+            return False, "missing bot_token or chat_id"
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        payload = {
+            "chat_id": self.chat_id,
+            "text": self.format_message(row),
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": True,
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                code = resp.getcode()
+                if 200 <= code < 300:
+                    return True, "delivered"
+                return False, f"HTTP {code}"
+        except urllib.error.HTTPError as e:
+            return False, f"HTTP {e.code}: {e.reason}"
+        except Exception as e:
+            return False, f"{type(e).__name__}: {e}"
+
+
+_KINDS = {"webhook": WebhookSink, "syslog": SyslogSink, "mqtt": MqttSink, "telegram": TelegramSink}
 
 
 def build_sinks(cfg: dict) -> list[Sink]:
