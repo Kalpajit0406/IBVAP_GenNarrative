@@ -22,7 +22,10 @@ from typing import Optional
 
 import cv2
 import numpy as np
-from ultralytics import YOLO
+try:
+    from ultralytics import YOLO
+except ImportError:
+    YOLO = None
 
 logger = logging.getLogger(__name__)
 

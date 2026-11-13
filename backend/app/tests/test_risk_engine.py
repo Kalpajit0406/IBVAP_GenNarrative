@@ -197,6 +197,16 @@ def _(rk):
     assert ra.level == "High", ra
 
 
+@case("night_ir illumination increases time_of_day score and sets illumination_state")
+def _(rk):
+    from ibvap.illumination import IlluminationMetrics
+    sr = _sr(0, [_person(0)])
+    sr.illumination = IlluminationMetrics(0, 30.0, 0.0, "night_ir", True, True)
+    ra = rk.assess(sr)
+    assert ra.illumination_state == "night_ir"
+    assert ra.time_of_day >= 0.9
+
+
 def run() -> int:
     failed = 0
     for name, fn in CASES:

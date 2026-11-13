@@ -23,13 +23,22 @@ import logging
 import time
 import warnings
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 import cv2
 import numpy as np
-import supervision as sv
-import torch
-from ultralytics import YOLO
+try:
+    import supervision as sv
+except ImportError:
+    sv = None
+try:
+    import torch
+except ImportError:
+    torch = None
+try:
+    from ultralytics import YOLO
+except ImportError:
+    YOLO = None
 
 from .motion_gate import MotionGate
 from .posture import PoseEstimator, PoseClassifier, PostureFlags, draw_skeleton
@@ -80,7 +89,7 @@ class StreamResult:
 @dataclass
 class _CamState:
     """State kept across frames for one camera stream."""
-    tracker: sv.ByteTrack
+    tracker: Any
     gate: MotionGate
     frames: int = 0
     last_detect_tick: int = -999

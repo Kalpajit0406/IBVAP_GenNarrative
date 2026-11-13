@@ -19,6 +19,7 @@ class RiskAssessment:
     weapon_tier: str = ""      # "armed" | "gun" | "posture" | ""  — drives the dashboard banner
     criminal_match: bool = False   # a face on the watchlist gallery was burst-confirmed this frame
     criminal_name: str = ""        # display name of the matched identity
+    illumination_state: str = ""   # "day" | "low_light" | "night_ir" | ""
 
 
 class RiskEngine:
@@ -49,7 +50,10 @@ class RiskEngine:
 
     def assess(self, sr: StreamResult) -> RiskAssessment:
         zone = self._zone(sr)
-        tod = self._time_of_day()
+        try:
+            tod = self._time_of_day(sr)
+        except TypeError:
+            tod = self._time_of_day()
         beh = self._behaviour(sr)
 
         raw = zone * self._w_zone + tod * self._w_time + beh * self._w_beh
@@ -128,8 +132,12 @@ class RiskEngine:
                                         # weapon on the same frame is graver
                                         # still and wins via max() above
 
+        ill = getattr(sr, "illumination", None)
+        ill_state = str(getattr(ill, "state", "")) if ill else ""
+
         return RiskAssessment(sr.cam_id, score, level, zone, tod, beh,
-                              weapon, armed, tier, criminal_match, criminal_name)
+                              weapon, armed, tier, criminal_match, criminal_name,
+                              illumination_state=ill_state)
 
     # ── Component scorers ─────────────────────────────────────────────────────
 
@@ -137,13 +145,22 @@ class RiskEngine:
         sensitivity = self._stream_cfg.get(sr.cam_id, {}).get("zone_sensitivity", 0.5)
         return sensitivity if (sr.person_count > 0 or sr.vehicle_count > 0) else 0.0
 
-    def _time_of_day(self) -> float:
+    def _time_of_day(self, sr: StreamResult | None = None) -> float:
         hour = datetime.datetime.now().hour
         if 22 <= hour or hour < 5:
-            return 1.0    # night
-        if 5 <= hour < 7 or 20 <= hour < 22:
-            return 0.6    # twilight
-        return 0.2        # daytime
+            clock_tod = 1.0    # night
+        elif 5 <= hour < 7 or 20 <= hour < 22:
+            clock_tod = 0.6    # twilight
+        else:
+            clock_tod = 0.2    # daytime
+
+        ill = getattr(sr, "illumination", None)
+        if ill is not None:
+            if getattr(ill, "is_night", False):
+                return max(clock_tod, 0.9 if getattr(ill, "is_ir", False) else 0.8)
+            elif getattr(ill, "state", "") == "low_light":
+                return max(clock_tod, 0.6)
+        return clock_tod
 
     def _behaviour(self, sr: StreamResult) -> float:
         """
