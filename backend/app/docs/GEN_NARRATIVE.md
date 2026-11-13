@@ -48,9 +48,17 @@ Returns:
 
 Generates a complete Markdown shift briefing report compiling all incidents across cameras, with severity breakdowns, executive summary, and cryptographic audit hash notes.
 
+### Command-Line Report Generator
+Run directly from terminal without opening the desktop GUI:
+```bash
+python scripts/generate_narrative_report.py --sample
+python scripts/generate_narrative_report.py --db data/events.db --hours 12 --out shift_report.md
+```
+
 ---
 
 ## 3. Architecture & LLM/VLM Extension
 
 * **Current Implementation:** Fast, deterministic template-synthesis engine optimized for edge compute (zero extra GPU/VRAM overhead).
 * **Roadmap Extension:** Pluggable connector to local Vision-Language Models (e.g. SmolVLM, Qwen2-VL, or Ollama) running asynchronously to generate deep multi-frame visual reasoning.
+
