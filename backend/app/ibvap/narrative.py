@@ -39,11 +39,12 @@ def _format_cam_label(cam_id: int, cam_name: Optional[str] = None) -> str:
     return cam_str
 
 
-def generate_event_narrative(event: Dict[str, Any]) -> Dict[str, Any]:
+def generate_event_narrative(event: Dict[str, Any], lang: str = "en") -> Dict[str, Any]:
     """
     Generate an explainable, human-readable natural language narrative
-    from a single stored or live event record.
+    from a single stored or live event record. Supports 'en' (English) and 'hi' (Hindi).
     """
+    lang = (lang or "en").lower().strip()
     event_id = str(event.get("event_id") or "UNKNOWN")
     cam_id = int(event.get("cam_id") or 0)
     cam_name = event.get("cam_name")
@@ -77,7 +78,42 @@ def generate_event_narrative(event: Dict[str, Any]) -> Dict[str, Any]:
     loiter_dur = details.get("duration")
 
     # Generate Narrative based on primary threat drivers
-    if is_armed or (has_weapon and posture == "AIM"):
+    if lang == "hi":
+        if is_armed or (has_weapon and posture == "AIM"):
+            headline = f"[गंभीर / CRITICAL] सशस्त्र खतरा: {cam_label}"
+            summary = (
+                f"{ts_utc} पर, {cam_label} पर एक सशस्त्र व्यक्ति हथियार के साथ आक्रामक मुद्रा (AIM) में देखा गया। "
+                f"खतरा स्तर: गंभीर (स्कोर: {score:.1f}/100)।"
+            )
+            action = "तत्काल रेड अलर्ट: त्वरित प्रतिक्रिया दल (QRT) को सशस्त्र सुरक्षा के साथ सेक्टर में तैनात करें। निकटवर्ती बीओपी को सतर्क करें।"
+            priority = 1
+        elif has_weapon:
+            headline = f"[गंभीर / CRITICAL] हथियार की पुष्टि: {cam_label}"
+            summary = f"निगरानी प्रणाली ने {cam_label} पर व्यक्ति के पास हथियार/बंदूक की पुष्टि की। फ्रेम में मौजूद: {persons} व्यक्ति। स्कोर: {score:.1f}/100।"
+            action = "सेक्टर गश्ती दल को तुरंत रोक लगाने और सुरक्षा घेरा बनाने का निर्देश दें।"
+            priority = 1
+        elif face_match and identity:
+            headline = f"[उच्च / HIGH] निगरानी सूची मिलान: {identity}"
+            summary = f"{cam_label} पर बायोमेट्रिक चेहरे की पहचान ने निगरानी सूची के व्यक्ति '{identity}' से मिलान की पुष्टि की।"
+            action = "राष्ट्रीय अपराध रिकॉर्ड (CrPI/CCTNS) डेटाबेस से मिलान सत्यापित करें।"
+            priority = 2
+        elif is_breach:
+            headline = f"[{severity.upper()}] सीमा घुसपैठ: {cam_label}"
+            summary = f"{cam_label} पर आभासी सीमा '{fence_name}' का उल्लंघन हुआ। क्षेत्र में: {persons} व्यक्ति, {vehicles} वाहन। स्कोर: {score:.1f}।"
+            action = "सीमा गश्ती दल को घुसपैठ स्थल की जांच और बाड़ अखंडता का निरीक्षण करने का निर्देश दें।"
+            priority = 1 if severity == "Critical" else 2
+        elif category == "plate" or plate:
+            plate_str = str(plate).strip().upper() if plate else "अज्ञात"
+            headline = f"[सूचना] वाहन प्रवेश {cam_label}: [{plate_str}]"
+            summary = f"{cam_label} पर स्वचालित नंबर प्लेट पहचान प्रणाली ने {v_type} [{plate_str}] दर्ज किया।"
+            action = "वाहन पंजीकरण की जांच क्षेत्रीय वाहन चोरी डेटाबेस (VAHAN) में करें।"
+            priority = 4 if severity in ("Info", "Low") else 3
+        else:
+            headline = f"[{severity.upper()}] संदिग्ध गतिविधि: {cam_label}"
+            summary = f"{cam_label} पर असामान्य गतिविधि दर्ज की गई (स्कोर: {score:.1f}/100)। व्यक्ति: {persons}, वाहन: {vehicles}।"
+            action = "कमांड डैशबोर्ड में ऑपरेटर दृश्य सत्यापन करें।"
+            priority = 3
+    elif is_armed or (has_weapon and posture == "AIM"):
         headline = f"[CRITICAL] ARMED THREAT in {cam_label}"
         summary = (
             f"At {ts_utc}, an armed subject was detected on {cam_label} actively holding a confirmed weapon "
@@ -185,13 +221,26 @@ def generate_event_narrative(event: Dict[str, Any]) -> Dict[str, Any]:
     return report.to_dict()
 
 
-def generate_shift_narrative(events: List[Dict[str, Any]], site_name: str = "BOP Sector Alpha") -> str:
+def generate_shift_narrative(
+    events: List[Dict[str, Any]],
+    site_name: str = "BOP Sector Alpha",
+    lang: str = "en",
+) -> str:
     """
     Synthesize an entire shift or query batch of events into an executive
-    operational Markdown narrative report for command handovers.
+    operational Markdown narrative report for command handovers. Supports 'en' and 'hi'.
     """
+    lang = (lang or "en").lower().strip()
     total = len(events)
     if total == 0:
+        if lang == "hi":
+            return (
+                f"# 📋 आईबीवीएपी (IBVAP) शिफ्ट घटना एवं परिचालन रिपोर्ट\n\n"
+                f"**स्थान:** {site_name}  \n"
+                f"**रिपोर्ट जनरेट समय:** {datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}  \n\n"
+                f"### सारांश (Executive Summary)\n"
+                f"इस निरीक्षण अवधि के दौरान कोई सुरक्षा विसंगति या सीमा घुसपैठ दर्ज नहीं की गई। सभी सेक्टर सुरक्षित हैं।\n"
+            )
         return (
             f"# 📋 IBVAP Shift Incident & Operational Report\n\n"
             f"**Site:** {site_name}  \n"
@@ -206,7 +255,7 @@ def generate_shift_narrative(events: List[Dict[str, Any]], site_name: str = "BOP
     categories: Dict[str, int] = {}
     cams: set[int] = set()
 
-    narratives = [generate_event_narrative(ev) for ev in events]
+    narratives = [generate_event_narrative(ev, lang=lang) for ev in events]
 
     for n in narratives:
         sev = n["severity"]

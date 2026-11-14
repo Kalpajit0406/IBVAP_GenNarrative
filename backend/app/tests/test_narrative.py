@@ -188,6 +188,33 @@ def _():
     assert "SHA-256" in report
 
 
+@case("hindi narrative generation formats incident in hindi")
+def _():
+    event = {
+        "event_id": "01HX98Z123456789ABCDEF001",
+        "cam_id": 1,
+        "cam_name": "उत्तर सीमा बाड़",
+        "severity": "Critical",
+        "category": "weapon",
+        "score": 96.0,
+        "persons": 1,
+        "vehicles": 0,
+        "details": {"armed": True, "weapon": True, "posture": "AIM"},
+        "ts_utc": "2026-11-13T21:00:00Z",
+    }
+    n = generate_event_narrative(event, lang="hi")
+    assert "सशस्त्र खतरा" in n["headline"]
+    assert "त्वरित प्रतिक्रिया दल" in n["recommended_action"]
+    assert n["tactical_priority"] == 1
+
+
+@case("hindi shift report formats hindi summary and nominal message")
+def _():
+    nominal = generate_shift_narrative([], site_name="बीओपी अल्फा", lang="hi")
+    assert "आईबीवीएपी (IBVAP) शिफ्ट घटना एवं परिचालन रिपोर्ट" in nominal
+    assert "कोई सुरक्षा विसंगति" in nominal
+
+
 def run():
     failed = 0
     for name, fn in CASES:
