@@ -51,6 +51,7 @@ from ibvap.event_store import EventStore
 from ibvap.evidence import EvidenceChain
 from ibvap.geofence import GeoFenceEngine
 from ibvap.learn import Harvester
+from ibvap.models import EventAckRequest, NarrativeResponse
 from ibvap.narrative import generate_event_narrative, generate_shift_narrative
 from ibvap.risk_engine import RiskEngine
 from ibvap.rtsp_capture import RtspCapture, redact
