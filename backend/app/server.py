@@ -31,7 +31,10 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 import yaml
 from contextlib import asynccontextmanager
 
@@ -56,6 +59,7 @@ from ibvap.security import (TOKEN_HEADER, ListenerGuard, is_authorized,
                             load_or_create_token)
 from ibvap.sinks import event_payload
 from ibvap.snapshots import SnapshotWriter, malicious_postures
+from ibvap.tamper import TamperDetector
 from ibvap.uplink_tuner import UplinkTuner
 from ibvap.ws_capture import WebSocketCapture
 from ibvap.youtube_capture import YouTubeCapture, is_youtube_url
@@ -103,6 +107,7 @@ _event_store = None                    # set by the inference worker; closed on 
 _harvester = None                      # continuous-learning data harvester
 _calibrator = None                     # per-camera adaptive calibration
 _snapshots = None                      # intrusion / malicious-movement snapshot writer
+_tamper = TamperDetector()             # camera tamper & feed health monitor
 cfg: dict = {}
 
 # Input source chosen at launch (python server.py [--mode ...]). "all" keeps the
@@ -1746,6 +1751,29 @@ def _run_retrain(script: str, flags: list) -> None:
         lt["state"] = "failed"
         lt["error"] = str(e)
         lt["finished"] = time.time()
+
+
+@app.get("/api/cameras/health")
+async def cameras_health():
+    """Per-camera feed health and tamper audit (occlusion, frozen feed, signal loss)."""
+    now = time.time()
+    report = {}
+    for cid, cap in captures.items():
+        frame = _latest_bgr.get(cid)
+        if frame is not None:
+            h = _tamper.assess_frame(cid, frame, ts=now)
+        else:
+            h = _tamper.check_signal(cid, now=now)
+        report[cid] = {
+            "cam_id": cid,
+            "connected": cap.connected,
+            "state": h.state,
+            "tampered": h.tampered,
+            "description": h.description,
+            "variance": round(h.variance, 2),
+            "last_seen_ts": h.last_seen_ts,
+        }
+    return JSONResponse({"ok": True, "health": report})
 
 
 @app.get("/status")
