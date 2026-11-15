@@ -20,11 +20,16 @@ be localhost via ``X-Forwarded-For``.
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
 import ipaddress
+import json
 import logging
 import secrets
+import time
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger("ibvap.security")
 
@@ -102,14 +107,156 @@ class ListenerGuard:
         await self.app(scope, receive, send)
 
 
+# ── Scoped API Clients & Role-Based Access Control ─────────────────────────
+VALID_SCOPES: Set[str] = {"read", "ack", "admin"}
+
+_SCOPE_HIERARCHY = {
+    "admin": {"admin", "ack", "read"},
+    "ack": {"ack", "read"},
+    "read": {"read"},
+}
+
+
+def _hash_token(raw_token: str) -> str:
+    return hashlib.sha256(raw_token.strip().encode("utf-8")).hexdigest()
+
+
+@dataclass
+class ApiClient:
+    client_id: str
+    name: str
+    token_hash: str
+    scopes: List[str]
+    created_at_utc: str
+    revoked: bool = False
+
+    def has_scope(self, required_scope: str) -> bool:
+        if self.revoked:
+            return False
+        for s in self.scopes:
+            if required_scope in _SCOPE_HIERARCHY.get(s, set()):
+                return True
+        return False
+
+    def to_dict(self) -> Dict:
+        return asdict(self)
+
+
+class ClientRegistry:
+    """
+    Manages named, revocable API clients with granular scopes (read, ack, admin).
+    Stored in data/api_clients.json.
+    """
+
+    def __init__(self, path: str | Path = "data/api_clients.json") -> None:
+        self.path = Path(path)
+        self.clients: Dict[str, ApiClient] = {}
+        self._load()
+
+    def _load(self) -> None:
+        if not self.path.is_file():
+            return
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            for item in data.get("clients", []):
+                client = ApiClient(**item)
+                self.clients[client.client_id] = client
+        except Exception as e:
+            logger.warning("Failed to load api_clients.json (%s) — starting empty", e)
+
+    def _save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"clients": [c.to_dict() for c in self.clients.values()]}
+        self.path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def register_client(self, name: str, scopes: List[str]) -> Tuple[str, ApiClient]:
+        """
+        Register a new client. Returns (raw_token, ApiClient).
+        The raw token is only returned once upon creation.
+        """
+        raw_token = "ibvap_" + secrets.token_urlsafe(28)
+        token_hash = _hash_token(raw_token)
+        cid = f"cli_{secrets.token_hex(6)}"
+        clean_scopes = [s for s in scopes if s in VALID_SCOPES] or ["read"]
+        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+        client = ApiClient(
+            client_id=cid,
+            name=name,
+            token_hash=token_hash,
+            scopes=clean_scopes,
+            created_at_utc=ts,
+            revoked=False,
+        )
+        self.clients[cid] = client
+        self._save()
+        logger.info("Registered API client %s (id: %s) with scopes %s", name, cid, clean_scopes)
+        return raw_token, client
+
+    def revoke_client(self, client_id: str) -> bool:
+        if client_id in self.clients:
+            self.clients[client_id].revoked = True
+            self._save()
+            logger.info("Revoked API client %s", client_id)
+            return True
+        return False
+
+    def verify_token(
+        self,
+        raw_token: str | None,
+        required_scope: str = "read",
+        master_token: Optional[str] = None,
+    ) -> Tuple[bool, Optional[ApiClient]]:
+        """
+        Verifies a token against master token or registered scoped clients.
+        """
+        if not raw_token or not raw_token.strip():
+            return False, None
+
+        tok = raw_token.strip()
+
+        # Check master admin token first (backward compatibility)
+        if master_token and hmac.compare_digest(tok, master_token.strip()):
+            master_client = ApiClient(
+                client_id="master_admin",
+                name="Master Admin",
+                token_hash=_hash_token(master_token),
+                scopes=["admin"],
+                created_at_utc="",
+                revoked=False,
+            )
+            return True, master_client
+
+        # Check registered clients by hashed token comparison
+        candidate_hash = _hash_token(tok)
+        for client in self.clients.values():
+            if hmac.compare_digest(client.token_hash, candidate_hash):
+                if not client.revoked and client.has_scope(required_scope):
+                    return True, client
+                return False, client
+
+        return False, None
+
+
 def is_authorized(method: str, path: str, client_host: str | None,
                   header_token: str | None, token: str,
                   allow_loopback: bool = True,
-                  require_token: bool = True) -> bool:
+                  require_token: bool = True,
+                  registry: Optional[ClientRegistry] = None) -> bool:
     if not require_token or not needs_token(method, path):
         return True
     if allow_loopback and is_loopback(client_host):
         return True
-    if not token or not header_token:
+    if not header_token:
+        return False
+
+    # Required scope is 'ack' for /ack routes, 'admin' for other mutating routes
+    req_scope = "ack" if path.endswith("/ack") else "admin"
+
+    if registry is not None:
+        ok, _ = registry.verify_token(header_token, required_scope=req_scope, master_token=token)
+        return ok
+
+    if not token:
         return False
     return hmac.compare_digest(header_token.strip(), token)
