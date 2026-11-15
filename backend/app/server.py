@@ -50,6 +50,7 @@ from ibvap.detector import Detector
 from ibvap.event_store import EventStore
 from ibvap.evidence import EvidenceChain
 from ibvap.geofence import GeoFenceEngine
+from ibvap.gis import to_geojson_feature_collection
 from ibvap.learn import Harvester
 from ibvap.models import EventAckRequest, NarrativeResponse
 from ibvap.narrative import generate_event_narrative, generate_shift_narrative
@@ -1420,6 +1421,10 @@ async def export_events(fmt: str = "csv", since: float | None = None,
         None, until, True)
     if fmt.lower() == "json":
         return JSONResponse({"events": rows, "count": len(rows)})
+    if fmt.lower() in ("geojson", "geo.json"):
+        post_name = str(cfg.get("site", {}).get("post_name", "BOP Sector"))
+        geo = to_geojson_feature_collection(rows, site_name=post_name)
+        return JSONResponse(geo)
     if fmt.lower() in ("narrative", "txt", "text", "md", "markdown"):
         post_name = str(cfg.get("site", {}).get("post_name", "BOP Sector"))
         narrative_text = generate_shift_narrative(rows, site_name=post_name)
