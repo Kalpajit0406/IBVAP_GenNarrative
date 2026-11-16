@@ -54,6 +54,7 @@ from ibvap.gis import to_geojson_feature_collection
 from ibvap.learn import Harvester
 from ibvap.models import EventAckRequest, NarrativeResponse
 from ibvap.narrative import generate_event_narrative, generate_shift_narrative
+from ibvap.report_styler import generate_html_shift_report
 from ibvap.risk_engine import RiskEngine
 from ibvap.rtsp_capture import RtspCapture, redact
 from ibvap.screen_capture import ScreenCapture
@@ -61,10 +62,13 @@ from ibvap.security import (TOKEN_HEADER, ListenerGuard, is_authorized,
                             load_or_create_token)
 from ibvap.sinks import event_payload
 from ibvap.snapshots import SnapshotWriter, malicious_postures
+from ibvap.spooler import AlertSpooler
+from ibvap.stream_negotiator import PROFILES, SubstreamNegotiator
 from ibvap.tamper import TamperDetector
 from ibvap.uplink_tuner import UplinkTuner
 from ibvap.ws_capture import WebSocketCapture
 from ibvap.youtube_capture import YouTubeCapture, is_youtube_url
+from ibvap.zones import ZONE_TYPES, TacticalZone, ZoneEscalationEngine
 
 # Windows consoles default to cp1252 and mangle non-ASCII log output
 if sys.platform == "win32":
@@ -110,6 +114,9 @@ _harvester = None                      # continuous-learning data harvester
 _calibrator = None                     # per-camera adaptive calibration
 _snapshots = None                      # intrusion / malicious-movement snapshot writer
 _tamper = TamperDetector()             # camera tamper & feed health monitor
+_zone_engine = ZoneEscalationEngine(Path("data/zones.json"))  # tactical perimeter zones
+_alert_spooler = AlertSpooler(Path("data/spool.db"))          # offline resilient alert buffer
+_stream_negotiator = SubstreamNegotiator()                   # adaptive bandwidth & burst engine
 cfg: dict = {}
 
 # Input source chosen at launch (python server.py [--mode ...]). "all" keeps the
@@ -1433,6 +1440,20 @@ async def export_events(fmt: str = "csv", since: float | None = None,
         return Response(narrative_text, media_type="text/markdown" if ext == "md" else "text/plain",
                         headers={"Content-Disposition":
                                  f'attachment; filename="ibvap_shift_narrative_{stamp}.{ext}"'})
+    if fmt.lower() in ("html", "dossier", "report"):
+        post_name = str(cfg.get("site", {}).get("post_name", "BOP Sector-IV Alpha"))
+        post_id = str(cfg.get("site", {}).get("post_id", "SSB-BN-41-BOP-04"))
+        narrative_text = generate_shift_narrative(rows, site_name=post_name)
+        merkle_root = getattr(_event_store, "latest_merkle_root", None)
+        if callable(merkle_root):
+            merkle_root = merkle_root()
+        html_doc = generate_html_shift_report(
+            rows,
+            shift_info={"bop_name": post_name, "post_id": post_id, "date": time.strftime("%d %b %Y")},
+            narrative_text=narrative_text,
+            merkle_root=merkle_root,
+        )
+        return HTMLResponse(content=html_doc)
     cols = ["event_id", "ts_utc", "site_id", "post_name", "cam_id", "cam_name",
             "lat", "lon", "severity", "category", "score", "persons", "vehicles",
             "ev_hash", "acked_at", "acked_by", "ack_note"]
@@ -1446,6 +1467,52 @@ async def export_events(fmt: str = "csv", since: float | None = None,
     return Response(buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition":
                              f'attachment; filename="ibvap_events_{stamp}.csv"'})
+
+
+@app.get("/api/events/export/html", response_class=HTMLResponse)
+async def export_events_html(since: float | None = None, until: float | None = None,
+                             limit: int = 1000, cam_id: int | None = None,
+                             severity: str | None = None, category: str | None = None):
+    """Generates an A4-printable formal HTML shift handover dossier."""
+    return await export_events(fmt="html", since=since, until=until, limit=limit,
+                               cam_id=cam_id, severity=severity, category=category)
+
+
+@app.get("/api/zones/matrix")
+async def get_zone_matrix():
+    """Returns tactical border zone escalation matrix and camera polygons."""
+    return JSONResponse({
+        "zone_types": ZONE_TYPES,
+        "camera_zones": _zone_engine.to_dict(),
+    })
+
+
+@app.post("/api/zones/evaluate")
+async def evaluate_zone_point(req: Request):
+    """Evaluates a normalized coordinate (x, y) against configured tactical zones."""
+    body = await req.json()
+    cam_id = str(body.get("cam_id", "0"))
+    x = float(body.get("x", 0.5))
+    y = float(body.get("y", 0.5))
+    base_risk = float(body.get("base_risk", 0.5))
+    hour = body.get("hour")
+    res = _zone_engine.evaluate_point(cam_id, (x, y), base_risk=base_risk, hour=hour)
+    return JSONResponse(res.to_dict())
+
+
+@app.get("/api/spooler/stats")
+async def get_spooler_stats():
+    """Returns resilient offline alert spooler statistics and circuit breaker health."""
+    return JSONResponse(_alert_spooler.stats())
+
+
+@app.get("/api/substream/profiles")
+async def get_substream_profiles():
+    """Returns available video ingest profiles and active camera streaming statuses."""
+    return JSONResponse({
+        "profiles": {k: v.to_dict() for k, v in PROFILES.items()},
+        "cameras": _stream_negotiator.status(),
+    })
 
 
 # ── Event-triggered ANPR results ────────────────────────────────────────────
