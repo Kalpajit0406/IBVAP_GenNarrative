@@ -43,10 +43,12 @@ from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse,
                                Response, StreamingResponse)
 
 from ibvap import ws_capture, youtube_capture
+from ibvap.acoustic import AcousticClassifier
 from ibvap.alert_forward import AlertForwarder
 from ibvap.behaviour import BehaviourEngine
 from ibvap.calibration import Calibrator
 from ibvap.detector import Detector
+from ibvap.drone_detector import DroneTrackAnalyzer
 from ibvap.event_store import EventStore
 from ibvap.evidence import EvidenceChain
 from ibvap.geofence import GeoFenceEngine
@@ -54,12 +56,15 @@ from ibvap.gis import to_geojson_feature_collection
 from ibvap.learn import Harvester
 from ibvap.models import EventAckRequest, NarrativeResponse
 from ibvap.narrative import generate_event_narrative, generate_shift_narrative
+from ibvap.ptz_director import CameraMountGeometry, SlewToCueDirector
+from ibvap.qrt_dispatch import QRTDispatchEngine
 from ibvap.report_styler import generate_html_shift_report
 from ibvap.risk_engine import RiskEngine
 from ibvap.rtsp_capture import RtspCapture, redact
 from ibvap.screen_capture import ScreenCapture
 from ibvap.security import (TOKEN_HEADER, ListenerGuard, is_authorized,
                             load_or_create_token)
+from ibvap.sentry_duress import SentryDuressMonitor, SentryPostConfig
 from ibvap.sinks import event_payload
 from ibvap.snapshots import SnapshotWriter, malicious_postures
 from ibvap.spooler import AlertSpooler
@@ -117,6 +122,14 @@ _tamper = TamperDetector()             # camera tamper & feed health monitor
 _zone_engine = ZoneEscalationEngine(Path("data/zones.json"))  # tactical perimeter zones
 _alert_spooler = AlertSpooler(Path("data/spool.db"))          # offline resilient alert buffer
 _stream_negotiator = SubstreamNegotiator()                   # adaptive bandwidth & burst engine
+_acoustic_classifier = AcousticClassifier()                  # acoustic gunshot / drone classifier
+_drone_analyzer = DroneTrackAnalyzer()                       # rogue UAV incursion & drop tracker
+_sentry_monitor = SentryDuressMonitor([                      # sentry posture & man-down monitor
+    SentryPostConfig("post_morcha_1", "Tower Morcha 1", 1),
+    SentryPostConfig("post_morcha_2", "Zero-Line Gate", 2),
+])
+_ptz_director = SlewToCueDirector(ptz_cam_id=4)              # multi-camera PTZ slew-to-cue director
+_qrt_engine = QRTDispatchEngine()                            # QRT mission brief and radio dispatch
 cfg: dict = {}
 
 # Input source chosen at launch (python server.py [--mode ...]). "all" keeps the
@@ -1513,6 +1526,74 @@ async def get_substream_profiles():
         "profiles": {k: v.to_dict() for k, v in PROFILES.items()},
         "cameras": _stream_negotiator.status(),
     })
+
+
+@app.post("/api/acoustic/event")
+async def post_acoustic_event(req: Request):
+    """Classifies acoustic sensor array telemetry and correlates camera field of view."""
+    body = await req.json()
+    ev = _acoustic_classifier.classify(
+        peak_amplitude=float(body.get("peak_amplitude", 0.5)),
+        rise_time_ms=float(body.get("rise_time_ms", 10.0)),
+        decay_time_ms=float(body.get("decay_time_ms", 100.0)),
+        spectral_centroid_hz=float(body.get("spectral_centroid_hz", 1500.0)),
+        spl_db=float(body.get("spl_db", 70.0)),
+        bearing_deg=float(body["bearing_deg"]) if "bearing_deg" in body else None,
+        timestamp=body.get("timestamp"),
+    )
+    if ev.tactical_priority <= 2:
+        _alert_spooler.enqueue(ev.to_dict(), priority=ev.tactical_priority)
+    return JSONResponse(ev.to_dict())
+
+
+@app.post("/api/drone/update")
+async def post_drone_update(req: Request):
+    """Evaluates aerial track bounding box for rogue UAV flight dynamics and payload drops."""
+    body = await req.json()
+    track_id = str(body.get("track_id", "uav_target"))
+    bbox = tuple(body.get("bbox", [0.4, 0.2, 0.6, 0.4]))
+    ts = body.get("timestamp")
+    alert = _drone_analyzer.update_track(track_id, bbox, timestamp=ts)
+    if alert:
+        return JSONResponse(alert.to_dict())
+    return JSONResponse({"status": "tracking", "track_id": track_id})
+
+
+@app.post("/api/sentry/update")
+async def post_sentry_update(req: Request):
+    """Evaluates sentry post occupancy and distress / man-down postures."""
+    body = await req.json()
+    post_id = str(body.get("post_id", "post_morcha_1"))
+    persons = list(body.get("persons", []))
+    ts = body.get("timestamp")
+    alert = _sentry_monitor.update(post_id, persons, timestamp=ts)
+    if alert:
+        return JSONResponse(alert.to_dict())
+    return JSONResponse({"status": "nominal", "post_id": post_id})
+
+
+@app.post("/api/ptz/slew")
+async def post_ptz_slew(req: Request):
+    """Computes Pan-Tilt-Zoom steering vector to slew optical PTZ onto detection coordinates."""
+    body = await req.json()
+    source_cam_id = int(body.get("source_cam_id", 1))
+    pt = tuple(body.get("point", [0.5, 0.5]))
+    height = float(body.get("bbox_height", 0.05))
+    track_id = str(body.get("track_id", "trk_ptz"))
+    prio = int(body.get("priority", 2))
+    cmd = _ptz_director.compute_slew(source_cam_id, pt, height, track_id, priority=prio)
+    if cmd:
+        return JSONResponse(cmd.to_dict())
+    return JSONResponse({"status": "lock_held_by_higher_priority", "track_id": track_id})
+
+
+@app.post("/api/qrt/dispatch")
+async def post_qrt_dispatch(req: Request):
+    """Generates structured tactical mission cards and radio dispatch scripts for QRT response."""
+    body = await req.json()
+    call_sign = str(body.get("call_sign", "QRT-ALPHA"))
+    card = _qrt_engine.generate_mission_card(body, call_sign=call_sign)
+    return JSONResponse(card.to_dict())
 
 
 # ── Event-triggered ANPR results ────────────────────────────────────────────
