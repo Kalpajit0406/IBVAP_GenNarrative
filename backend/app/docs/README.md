@@ -8,6 +8,7 @@ numbers, and design rationale. Everything below is a focused guide for one part.
 |---|---|
 | [STARTUP.md](STARTUP.md) | Bring a new machine up from zero — CUDA/PyTorch, deps, first run |
 | [OPERATIONS_RUNBOOK.md](OPERATIONS_RUNBOOK.md) | Border operator deployment runbook, zone escalation matrix, resilience spooler, and tactical drill guide |
+| [TACTICAL_SYSTEMS.md](TACTICAL_SYSTEMS.md) | Acoustic gunshot classification, drone payload tracking, sentry duress, PTZ slew-to-cue, and QRT mission dispatch |
 | [CCTV_INTEGRATION.md](CCTV_INTEGRATION.md) | Wire real RTSP / NVR / ONVIF cameras into the pipeline; vendor URL tables |
 | [C2_INTEGRATION.md](C2_INTEGRATION.md) | Command & Control integration: SSE stream, wire format, GeoJSON maps, and scoped auth |
 | [CUSTOM_DOMAIN.md](CUSTOM_DOMAIN.md) | Serve the phone link on your own domain via a cloudflared named tunnel |
